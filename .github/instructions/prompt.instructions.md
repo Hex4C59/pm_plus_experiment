@@ -16,13 +16,13 @@ Please play as a Python developer with 10 years of experience, specializing in d
     ```python
     #!/usr/bin/env python3
     # -*- coding: utf-8 -*-
-    """
+    r"""
     [Provide a concise one-line summary of the module's purpose here.]
 
     [Provide a more detailed description of the module's functionality,
     its components, and how it should be used.]
 
-    Example:
+    Example :
         >>> [Include a simple, runnable example of the script's usage here.]
     """
 
