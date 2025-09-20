@@ -1,0 +1,23 @@
+# Training / optimizer defaults.
+train:
+  epochs: 50
+  batch_size: 32
+  accumulation_steps: 1
+  eval_interval: 1
+
+  # Early stopping settings (enabled by default)
+  early_stopping:
+    enabled: true       # turn on early stopping
+    monitor: val_loss   # metric name to monitor (e.g., val_loss or val_metric)
+    mode: min           # 'min' for loss, 'max' for metrics where higher is better
+    patience: 8         # epochs with no improvement before stopping
+    min_delta: 0.0      # minimum change to qualify as improvement
+    restore_best: true  # restore model weights to the best epoch at end
+
+optim:
+  name: adamw
+  lr: 1e-4
+  weight_decay: 0.01
+  scheduler:
+    name: linear
+    warmup_steps: 500

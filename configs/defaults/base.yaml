@@ -1,0 +1,13 @@
+# Basic, shared settings used by other config fragments.
+project:
+  name: pm_plus_experiment
+  output_root: runs
+  seed: 42
+
+system:
+  device: cpu        # override to "cuda:0" for GPU
+  num_workers: 4
+
+io:
+  sample_rate: 16000
+  audio_exts: [".wav", ".flac"]

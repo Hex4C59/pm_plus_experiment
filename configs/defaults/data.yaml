@@ -1,0 +1,12 @@
+# Data-related default paths and split configuration.
+data:
+  root: data
+  raw: ${data.root}/raw/PM+
+  processed: ${data.root}/processed/PM+_split
+  features: ${data.root}/processed/features
+  annotations: ${data.root}/annotations/label.xlsx
+
+split:
+  names: ["train", "test"]
+  train_ratio: 0.8
+  stratify_by: "gender"   # supports "gender" or null

@@ -1,0 +1,42 @@
+# Example experiment that composes defaults and overrides for a run.
+# Usage: load this YAML in your training script and override paths/seed as needed.
+experiment:
+  id: pooled_mlp_v1
+  description: "Pooled MLP baseline with wav2vec2 features and gender-stratified split."
+
+include:
+  - ../defaults/base.yaml
+  - ../defaults/data.yaml
+  - ../defaults/model.yaml
+  - ../defaults/train.yaml
+
+overrides:
+  project:
+    output_root: runs/pooled_mlp_v1
+    seed: 123
+
+  data:
+    processed: data/processed/PM+_split
+    features: data/processed/features/wav2vec2-base-l12
+
+  model:
+    hidden_dims: [512, 256]
+    pooling: "mean_std"
+    dropout: 0.2
+
+  train:
+    epochs: 80
+    batch_size: 24
+    # experiment-specific early stopping override (optional)
+    early_stopping:
+      enabled: true
+      monitor: val_loss
+      mode: min
+      patience: 10
+      min_delta: 0.0001
+      restore_best: true
+
+  optim:
+    lr: 5e-5
+    scheduler:
+      warmup_steps: 1000
