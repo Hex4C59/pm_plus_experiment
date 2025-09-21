@@ -43,6 +43,7 @@ import torch
 import yaml
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from src.data.loader import make_dataloader
 from src.losses.lccc import LCCCLoss
@@ -225,6 +226,7 @@ def build_dataloaders(
     data_cfg: Dict[str, Any],
     batch_size: int,
     num_workers: int,
+    pin_memory: bool,
 ) -> Tuple[DataLoader, DataLoader, str]:
     """
     Create train and validation/test dataloaders.
@@ -237,6 +239,8 @@ def build_dataloaders(
         data_cfg: Data configuration dictionary.
         batch_size: Batch size for both train and val loaders.
         num_workers: Number of DataLoader workers.
+        pin_memory: Whether to pin memory in the DataLoader workers (useful when
+            using CUDA to speed up host-to-device transfers).
 
     Returns:
         Tuple of (train_loader, val_loader, val_split_name).
@@ -274,7 +278,7 @@ def build_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
     val_loader = make_dataloader(
         features_root=features_root,
@@ -284,7 +288,7 @@ def build_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
     return train_loader, val_loader, val_split
 
@@ -442,9 +446,11 @@ def train_one_epoch(
     loss_fn: LCCCLoss,
     accumulation_steps: int = 1,
     max_grad_norm: Optional[float] = None,
+    epoch: int = 0,
+    show_progress: bool = True,
 ) -> Tuple[float, int]:
     """
-    Train model for a single epoch.
+    Train model for a single epoch and show progress with tqdm.
 
     Args:
         model: Model to train.
@@ -454,9 +460,14 @@ def train_one_epoch(
         loss_fn: LCCC loss function.
         accumulation_steps: Gradient accumulation steps.
         max_grad_norm: Optional gradient norm clipping.
+        epoch: Current epoch number used for progress description.
+        show_progress: Whether to display a tqdm progress bar.
 
     Returns:
         Tuple of (average_loss, num_steps).
+
+    Raises:
+        ValueError: If annotations are missing in a training batch.
 
     """
     model.train()
@@ -464,11 +475,16 @@ def train_one_epoch(
     steps = 0
     optimizer.zero_grad(set_to_none=True)
 
-    for i, batch in enumerate(loader, 1):
+    iterator = loader
+    if show_progress:
+        iterator = tqdm(loader, desc=f"Train Epoch {epoch}", unit="batch", leave=False)
+
+    last_loss_value = None
+    for i, batch in enumerate(iterator, 1):
         feats = batch["features"].to(device)
         lengths = batch["lengths"].to(device)
-        val_t = batch["valence"]
-        aro_t = batch["arousal"]
+        val_t = batch.get("valence")
+        aro_t = batch.get("arousal")
         if val_t is None or aro_t is None:
             raise ValueError("Annotations (valence/arousal) are required for training")
         val_t = val_t.to(device)
@@ -488,11 +504,15 @@ def train_one_epoch(
             optimizer.zero_grad(set_to_none=True)
             steps += 1
             total_loss += float(out["loss"].detach().cpu().item())
+        last_loss_value = out["loss"].detach().cpu().item()
+
+        if show_progress:
+            iterator.set_postfix({"loss": f"{last_loss_value:.4f}"})
 
     # handle last partial accumulation as a step for reporting
     if (i % accumulation_steps) != 0:
         steps += 1
-        total_loss += float(out["loss"].detach().cpu().item())
+        total_loss += float(last_loss_value)
 
     avg_loss = total_loss / max(1, steps)
     return avg_loss, steps
@@ -504,19 +524,26 @@ def evaluate(
     loader: DataLoader,
     device: torch.device,
     loss_fn: LCCCLoss,
+    epoch: int = 0,
+    show_progress: bool = True,
 ) -> Dict[str, float]:
     """
-    Evaluate model on validation/test set.
+    Evaluate model on validation/test set and show progress with tqdm.
 
     Args:
         model: Trained model in eval mode.
         loader: DataLoader for validation/test set.
         device: Torch device.
         loss_fn: LCCC loss for reporting val_loss.
+        epoch: Current epoch number for progress description.
+        show_progress: Whether to display a tqdm progress bar.
 
     Returns:
         Dictionary with avg loss and CCC metrics:
         {'val_loss','ccc_valence','ccc_arousal'}.
+
+    Raises:
+        ValueError: If validation batch lacks valence/arousal targets.
 
     """
     model.eval()
@@ -525,11 +552,15 @@ def evaluate(
     metric_v = CCCMetric(name="ccc_valence")
     metric_a = CCCMetric(name="ccc_arousal")
 
-    for batch in loader:
+    iterator = loader
+    if show_progress:
+        iterator = tqdm(loader, desc=f"Eval Epoch {epoch}", unit="batch", leave=False)
+
+    for batch in iterator:
         feats = batch["features"].to(device)
         lengths = batch["lengths"].to(device)
-        val_t = batch["valence"]
-        aro_t = batch["arousal"]
+        val_t = batch.get("valence")
+        aro_t = batch.get("arousal")
         if val_t is None or aro_t is None:
             raise ValueError("Validation requires valence and arousal targets")
         val_t = val_t.to(device)
@@ -544,6 +575,9 @@ def evaluate(
 
         metric_v.update(preds["valence"].detach().cpu(), val_t.detach().cpu())
         metric_a.update(preds["arousal"].detach().cpu(), aro_t.detach().cpu())
+
+        if show_progress:
+            iterator.set_postfix({"val_loss": f"{total_loss / steps:.4f}"})
 
     avg_loss = total_loss / max(1, steps)
     ccc_v = float(metric_v.compute().item())
@@ -625,7 +659,9 @@ def main() -> None:
 
     # Data and loaders
     batch_size = int(train_cfg.get("batch_size", 32))
+
     num_workers = int(project.get("num_workers", 4))
+    pin_memory = bool(project.get("pin_memory", True))
     if args.no_val:
         # Only prepare train loader; skip building/using val loader.
         train_loader = make_dataloader(
@@ -636,7 +672,7 @@ def main() -> None:
             batch_size=batch_size,
             shuffle=True,
             num_workers=num_workers,
-            pin_memory=True,
+            pin_memory=pin_memory,
         )
         val_loader = None
         val_split = "none"
@@ -653,7 +689,10 @@ def main() -> None:
         print("[Info] Validation disabled during training; use infer.py for test")
     else:
         train_loader, val_loader, val_split = build_dataloaders(
-            data_cfg, batch_size=batch_size, num_workers=num_workers
+            data_cfg,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
         )
 
     # Model, optimizer, scheduler, loss
@@ -708,6 +747,8 @@ def main() -> None:
             loss_fn=loss_fn,
             accumulation_steps=accum_steps,
             max_grad_norm=max_grad_norm,
+            epoch=epoch,
+            show_progress=True,
         )
         tr_losses.append(avg_loss)
 
@@ -719,7 +760,12 @@ def main() -> None:
         # Only run evaluation when a val loader is available
         if (not args.no_val) and ((epoch % eval_interval) == 0 or epoch == epochs):
             eval_out = evaluate(
-                model=model, loader=val_loader, device=device, loss_fn=loss_fn
+                model=model,
+                loader=val_loader,
+                device=device,
+                loss_fn=loss_fn,
+                epoch=epoch,
+                show_progress=True,
             )
             va_losses.append(eval_out["val_loss"])
             ccc_v_hist.append(eval_out["ccc_valence"])

@@ -1,4 +1,4 @@
-# PM+ Experiment Template (Speech Emotion Recognition)
+# PM+ Experiment (Speech Emotion Recognition)
 
 This repository is a lightweight, reproducible template for Speech Emotion
 Recognition (SER) on the PM+ dataset. It standardizes project structure,

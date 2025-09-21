@@ -16,10 +16,7 @@ overrides:
 
   data:
     processed: data/processed/PM+_split
-    # POINT OF FIX:
-    # features should point to the FEATURES ROOT (parent of model folders)
     features: data/processed/features
-    # specify which model folder under data/processed/features to use
     model_folder: wav2vec2-base-l0
 
   model:

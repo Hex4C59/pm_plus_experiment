@@ -8,7 +8,9 @@
 - 提供统一的运行入口（train/eval/infer）并保持与配置系统的良好对接。
 
 建议目录组织（示例）
-- train.py / eval.py / infer.py    # 训练、评估、推理脚本入口
+- train.py # 训练脚本入口
+- eval.py # 评估脚本入口，可选
+- infer.py # 推理脚本入口, 可选
 - models/                          # 模型定义与注册
 - data/                            # 数据集、transforms、loader 工厂
 - losses/                          # 损失函数实现与组合器
