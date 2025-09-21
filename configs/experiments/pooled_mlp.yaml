@@ -13,11 +13,14 @@ include:
 overrides:
   project:
     output_root: runs/pooled_mlp_v1
-    seed: 123
 
   data:
     processed: data/processed/PM+_split
-    features: data/processed/features/wav2vec2-base-l12
+    # POINT OF FIX:
+    # features should point to the FEATURES ROOT (parent of model folders)
+    features: data/processed/features
+    # specify which model folder under data/processed/features to use
+    model_folder: wav2vec2-base-l0
 
   model:
     hidden_dims: [512, 256]
@@ -25,7 +28,7 @@ overrides:
     dropout: 0.2
 
   train:
-    epochs: 80
+    epochs: 200
     batch_size: 24
     # experiment-specific early stopping override (optional)
     early_stopping:

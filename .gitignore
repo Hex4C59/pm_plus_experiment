@@ -13,3 +13,5 @@ data/gender
 data/processed
 pretrained/*
 !pretrained/README.md
+runs/*
+!runs/README.md

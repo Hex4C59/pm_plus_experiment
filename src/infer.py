@@ -21,7 +21,6 @@ __maintainer__ = "Liu Yang"
 __email__ = "yang.liu6@siat.ac.cn"
 __last_updated__ = "2025-09-20"
 
-from __future__ import annotations
 
 import argparse
 import csv
@@ -97,13 +96,22 @@ def load_config_with_includes(config_path: str) -> Dict[str, Any]:
       - include: list of file paths (relative to this config) to merge
       - overrides: dict to deep-override included/base configs
 
+    After merging, expand placeholders of the form ${some.path} using
+    values from the merged config (dotted lookup) or environment vars.
+
     Args:
         config_path: Path to the experiment YAML.
 
     Returns:
-        A merged configuration dictionary.
+        A merged configuration dictionary with placeholders resolved.
+
+    Raises:
+        FileNotFoundError: If an included file does not exist.
+        KeyError: If a placeholder cannot be resolved from config or env.
 
     """
+    import re
+
     base_dir = Path(config_path).parent
     cfg = load_yaml(config_path)
     merged: Dict[str, Any] = {}
@@ -116,6 +124,57 @@ def load_config_with_includes(config_path: str) -> Dict[str, Any]:
     deep_update(merged, top_cfg)
     overrides = cfg.get("overrides", {}) or {}
     deep_update(merged, overrides)
+
+    # --- placeholder resolution utilities ---
+    placeholder_pattern = re.compile(r"\$\{([^}]+)\}")
+
+    def _lookup_dotted(d: Dict[str, Any], dotted: str) -> Optional[str]:
+        """Lookup dotted path in dict and return string value or None."""
+        cur: Any = d
+        for part in dotted.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                return None
+            cur = cur[part]
+        if cur is None:
+            return None
+        if isinstance(cur, (str, int, float, bool)):
+            return str(cur)
+        try:
+            import json
+
+            return json.dumps(cur, ensure_ascii=False)
+        except Exception:
+            return str(cur)
+
+    def _resolve(obj: Any) -> Any:
+        """Recursively resolve placeholders in obj using merged dict and env."""
+        if isinstance(obj, dict):
+            return {k: _resolve(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_resolve(v) for v in obj]
+        if isinstance(obj, str):
+            s = obj
+            max_iters = 10
+            for _ in range(max_iters):
+                matches = list(placeholder_pattern.finditer(s))
+                if not matches:
+                    break
+                new_s = s
+                for m in matches:
+                    key = m.group(1)
+                    replacement = _lookup_dotted(merged, key)
+                    if replacement is None:
+                        replacement = os.environ.get(key)
+                    if replacement is None:
+                        raise KeyError(f"Cannot resolve placeholder '{key}' in config")
+                    new_s = new_s.replace(m.group(0), replacement)
+                if new_s == s:
+                    break
+                s = new_s
+            return s
+        return obj
+
+    merged = _resolve(merged)
     return merged
 
 

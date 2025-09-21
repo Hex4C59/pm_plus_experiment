@@ -23,7 +23,6 @@ __maintainer__ = "Liu Yang"
 __email__ = "yang.liu6@siat.ac.cn"
 __last_updated__ = "2025-09-20"
 
-from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple

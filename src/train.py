@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-Train a pooled-MLP regressor on wav2vec2 features with CCC-based loss.
+Train a pooled-MLP regressor using CCC-based loss for continuous emotion.
 
-This script trains the PooledMLPRegressor on pre-extracted frame-level
-features (e.g., wav2vec2 hidden states) for continuous emotion regression.
-It supports:
-  - YAML configuration with include and overrides
-  - CCC-based loss for valence/arousal (weighted LCCC)
-  - Early stopping with best/last checkpoint saving
-  - CSV logging and optional curve plotting
-  - Reproducible seeding and GPU/CPU device selection
+This module implements the end-to-end training workflow for a pooled MLP
+regressor that consumes pre-extracted frame-level features (e.g.,
+wav2vec2 hidden states) and predicts continuous valence and arousal
+values. It provides utilities to load and merge YAML configs (with
+include/overrides), build dataloaders, construct the model and optimizer,
+run training with gradient accumulation and optional gradient clipping,
+evaluate using CCC metrics, perform early stopping, save best/last
+checkpoints, and emit CSV logging and optional PNG plots for analysis.
+
+The module is designed for reproducible experiments: it writes the final
+merged configuration and a small manifest into the experiment output
+directory and exposes a command line interface for all important
+parameters.
 
 Example :
     >>> python -m src.train \\
     ...   --config configs/experiments/pooled_mlp.yaml \\
-    ...   --device cuda:0 --exp_dir runs/pooled_mlp_v1 \\
-    ...   --plot
+    ...   --device cuda:0 --exp_dir runs/train/pooled_mlp_v1 --plot
 """
 
 __author__ = "Liu Yang"
@@ -26,7 +30,6 @@ __maintainer__ = "Liu Yang"
 __email__ = "yang.liu6@siat.ac.cn"
 __last_updated__ = "2025-09-20"
 
-from __future__ import annotations
 
 import argparse
 import os
@@ -107,16 +110,22 @@ def load_config_with_includes(config_path: str) -> Dict[str, Any]:
       - include: list of file paths (relative to this config) to merge
       - overrides: dict to deep-override included/base configs
 
+    After merging, expand placeholders of the form ${some.path} using
+    values from the merged config (dotted lookup) or environment vars.
+
     Args:
         config_path: Path to the experiment YAML.
 
     Returns:
-        A merged configuration dictionary.
+        A merged configuration dictionary with placeholders resolved.
 
     Raises:
-        ValueError: If include list contains non-existing files.
+        FileNotFoundError: If an included file does not exist.
+        KeyError: If a placeholder cannot be resolved from config or env.
 
     """
+    import re
+
     base_dir = Path(config_path).parent
     cfg = load_yaml(config_path)
     merged: Dict[str, Any] = {}
@@ -131,6 +140,62 @@ def load_config_with_includes(config_path: str) -> Dict[str, Any]:
     # apply overrides if present
     overrides = cfg.get("overrides", {}) or {}
     deep_update(merged, overrides)
+
+    # --- placeholder resolution utilities ---
+    placeholder_pattern = re.compile(r"\$\{([^}]+)\}")
+
+    def _lookup_dotted(d: Dict[str, Any], dotted: str) -> Optional[str]:
+        """Lookup dotted path in dict and return string value or None."""
+        cur: Any = d
+        for part in dotted.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                return None
+            cur = cur[part]
+        # convert non-str to str for substitution
+        if cur is None:
+            return None
+        if isinstance(cur, (str, int, float, bool)):
+            return str(cur)
+        # for other types (list/dict), return JSON-ish string
+        try:
+            import json
+
+            return json.dumps(cur, ensure_ascii=False)
+        except Exception:
+            return str(cur)
+
+    def _resolve(obj: Any) -> Any:
+        """Recursively resolve placeholders in obj using merged dict and env."""
+        if isinstance(obj, dict):
+            return {k: _resolve(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_resolve(v) for v in obj]
+        if isinstance(obj, str):
+            # repeatedly replace until no placeholders remain
+            s = obj
+            max_iters = 10
+            for _ in range(max_iters):
+                matches = list(placeholder_pattern.finditer(s))
+                if not matches:
+                    break
+                new_s = s
+                for m in matches:
+                    key = m.group(1)
+                    replacement = _lookup_dotted(merged, key)
+                    if replacement is None:
+                        replacement = os.environ.get(key)
+                    if replacement is None:
+                        raise KeyError(f"Cannot resolve placeholder '{key}' in config")
+                    # replace this occurrence
+                    new_s = new_s.replace(m.group(0), replacement)
+                if new_s == s:
+                    break
+                s = new_s
+            return s
+        return obj
+
+    # perform resolution in merged config
+    merged = _resolve(merged)
     return merged
 
 
@@ -514,6 +579,11 @@ def main() -> None:
         help="Resume from checkpoint path (optional)",
     )
     parser.add_argument("--plot", action="store_true", help="Plot curves at the end")
+    parser.add_argument(
+        "--no_val",
+        action="store_true",
+        help="Disable validation during training (use infer.py for test).",
+    )
     args = parser.parse_args()
 
     cfg = load_config_with_includes(args.config)
@@ -556,9 +626,35 @@ def main() -> None:
     # Data and loaders
     batch_size = int(train_cfg.get("batch_size", 32))
     num_workers = int(project.get("num_workers", 4))
-    train_loader, val_loader, val_split = build_dataloaders(
-        data_cfg, batch_size=batch_size, num_workers=num_workers
-    )
+    if args.no_val:
+        # Only prepare train loader; skip building/using val loader.
+        train_loader = make_dataloader(
+            features_root=data_cfg["features"],
+            split="train",
+            model_folder=data_cfg.get("model_folder", None),
+            annotations=data_cfg.get("annotations", None),
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+        )
+        val_loader = None
+        val_split = "none"
+        # disable early stopping and related mechanisms
+        es_enabled = False
+
+        # Record explicitly that validation is disabled both to console
+        # and to the CSV metrics file for reproducibility.
+        try:
+            logger.log({"validation_status": "disabled"})
+        except Exception:
+            # Fallback to console if CSV logging fails.
+            print("[Logger] Failed to write validation disabled note to metrics.csv")
+        print("[Info] Validation disabled during training; use infer.py for test")
+    else:
+        train_loader, val_loader, val_split = build_dataloaders(
+            data_cfg, batch_size=batch_size, num_workers=num_workers
+        )
 
     # Model, optimizer, scheduler, loss
     model = build_model(model_cfg, device)
@@ -620,7 +716,8 @@ def main() -> None:
             scheduler.step()
 
         metrics: Dict[str, float] = {}
-        if (epoch % eval_interval) == 0 or epoch == epochs:
+        # Only run evaluation when a val loader is available
+        if (not args.no_val) and ((epoch % eval_interval) == 0 or epoch == epochs):
             eval_out = evaluate(
                 model=model, loader=val_loader, device=device, loss_fn=loss_fn
             )
@@ -629,7 +726,7 @@ def main() -> None:
             ccc_a_hist.append(eval_out["ccc_arousal"])
             metrics = eval_out
 
-            # Early stopping check
+            # Early stopping check (es_enabled may have been disabled when --no_val)
             if es_enabled:
                 current = metrics.get(monitor, float("inf"))
                 if is_improvement(current, es_state.best_score, mode, min_delta):
