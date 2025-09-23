@@ -1,84 +1,90 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-Model registry for dynamic model instantiation.
+Model registry for the project.
 
-This module provides a registry system to dynamically instantiate models
-based on configuration. It allows users to specify model types in their
-experiment configurations without hardcoding model classes in the training script.
+Provides a simple MODEL_REGISTRY mapping model string keys to model
+classes and a small factory helper `get_model` that constructs a model
+from a configuration dictionary.
 
 Example :
-    >>> from src.models import get_model_class
-    >>> model_cls = get_model_class("pooled_mlp")
-    >>> model = model_cls.from_config(config)
+    >>> from src.models import get_model
+    >>> cfg = {"input_size":768, "output_size":2, "hidden_size":128}
+    >>> model = get_model("mtl_gru", cfg)
 """
 
-__author__ = "Liu Yang"
-__copyright__ = "Copyright 2025, AIMSL"
-__license__ = "MIT"
-__maintainer__ = "Liu Yang"
-__email__ = "yang.liu6@siat.ac.cn"
-__last_updated__ = "2025-09-22"
+from typing import Any, Callable, Dict, Optional, Type
 
-from typing import Any, Dict, Type
+# import model classes (best-effort; keep fallbacks)
+try:
+    from .attn_bilstm import SelfAttentiveBiLSTMRegressor  # type: ignore
+except Exception:
+    SelfAttentiveBiLSTMRegressor = None  # type: ignore
 
-from src.models.base_model import BaseModel
+try:
+    from .mtl_GRU_model import GRUModel  # type: ignore
+except Exception:
+    GRUModel = None  # type: ignore
 
-# Registry to store model classes
-_MODEL_REGISTRY: Dict[str, Type[BaseModel]] = {}
+# pooled_mlp class name may vary; try common names
+PooledMLP = None
+try:
+    from .pooled_mlp import PooledMLPRegressor as PooledMLP  # type: ignore
+except Exception:
+    try:
+        from .pooled_mlp import PooledMLP as PooledMLP  # type: ignore
+    except Exception:
+        PooledMLP = None  # type: ignore
+
+# registry mapping keys used in configs -> class
+MODEL_REGISTRY: Dict[str, Type] = {}
+if SelfAttentiveBiLSTMRegressor is not None:
+    MODEL_REGISTRY["attn_bilstm"] = SelfAttentiveBiLSTMRegressor
+if GRUModel is not None:
+    MODEL_REGISTRY["gru"] = GRUModel
+if PooledMLP is not None:
+    MODEL_REGISTRY["pooled_mlp"] = PooledMLP
 
 
-def register_model(name: str, model_class: Type[BaseModel]) -> None:
+def get_model_class(name: str, cfg: Optional[Dict[str, Any]] = None) -> Any:
     """
-    Register a model class in the registry.
+    Return a model class or an instantiated model.
+
+    If `cfg` is None this function returns the registered model class so
+    callers can instantiate it themselves. If `cfg` is provided the
+    function will attempt to construct and return an instance by calling
+    the class's `from_config` method (preferred) or by invoking the
+    class constructor with `**cfg`.
 
     Args:
-        name: String identifier for the model type.
-        model_class: The model class to register.
+        name: Registry key of the model (e.g. "gru", "attn_bilstm").
+        cfg: Optional configuration dict for instantiation. If omitted,
+            the raw model class is returned.
 
     Returns:
-        None
-
-    """
-    _MODEL_REGISTRY[name] = model_class
-
-
-def get_model_class(name: str) -> Type[BaseModel]:
-    """
-    Retrieve a model class from the registry.
-
-    Args:
-        name: String identifier for the model type.
-
-    Returns:
-        The registered model class.
+        The model class (when cfg is None) or an instantiated model object.
 
     Raises:
-        KeyError: If the model type is not registered.
+        KeyError: If requested model name is not registered.
+        RuntimeError: If instantiation with the provided cfg fails.
 
     """
-    if name not in _MODEL_REGISTRY:
+    key = name.lower()
+    if key not in MODEL_REGISTRY:
         raise KeyError(
-            f"Model type '{name}' is not registered. Available types: {list(_MODEL_REGISTRY.keys())}"
+            f"Model '{name}' not found in MODEL_REGISTRY. "
+            f"Available: {list(MODEL_REGISTRY.keys())}"
         )
-    return _MODEL_REGISTRY[name]
+    cls = MODEL_REGISTRY[key]
 
+    # If caller only wants the class, return it.
+    if cfg is None:
+        return cls
 
-def list_available_models() -> list:
-    """
-    List all registered model types.
-
-    Returns:
-        List of available model type names.
-
-    """
-    return list(_MODEL_REGISTRY.keys())
-
-
-# Import and register models
-from src.models.attn_bilstm import SelfAttentiveBiLSTMRegressor
-from src.models.pooled_mlp import PooledMLPRegressor
-
-# Register models
-register_model("pooled_mlp", PooledMLPRegressor)
-register_model("attn_bilstm", SelfAttentiveBiLSTMRegressor)
+    # Prefer `from_config` factory when instantiating.
+    if hasattr(cls, "from_config"):
+        return cls.from_config(cfg)  # type: ignore
+    try:
+        return cls(**cfg)  # type: ignore
+    except Exception as exc:
+        raise RuntimeError(f"Failed to instantiate model '{name}': {exc}") from exc

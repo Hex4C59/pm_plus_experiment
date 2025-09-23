@@ -313,11 +313,13 @@ def build_model(model_cfg: Dict[str, Any], device: torch.device) -> torch.nn.Mod
     """
     model_type = model_cfg.get("type", "pooled_mlp")
 
-    try:
-        model_class = get_model_class(model_type)
-    except KeyError as e:
-        raise KeyError(f"Unsupported model type: {model_type}") from e
-    model = model_class.from_config(model_cfg)
+    # Obtain model class from registry, then instantiate using from_config
+    # (or fall back to direct construction) for consistent behavior.
+    model_cls = get_model_class(model_type)
+    if hasattr(model_cls, "from_config"):
+        model = model_cls.from_config(model_cfg)
+    else:
+        model = model_cls(**model_cfg)
     return model.to(device)
 
 
@@ -684,7 +686,6 @@ def main() -> None:
             pin_memory=pin_memory,
         )
         val_loader = None
-        val_split = "none"
         # disable early stopping and related mechanisms
         es_enabled = False
 
