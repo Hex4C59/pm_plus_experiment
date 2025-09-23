@@ -45,10 +45,10 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from models import get_model_class
 from src.data.loader import make_dataloader
 from src.losses.lccc import LCCCLoss
 from src.metrics.ccc import CCCMetric
-from src.models.pooled_mlp import PooledMLPRegressor
 from src.utils.checkpoint import load_checkpoint, save_checkpoint
 from src.utils.logger import Logger
 from src.utils.visualization import plot_losses, plot_metrics
@@ -308,7 +308,13 @@ def build_model(model_cfg: Dict[str, Any], device: torch.device) -> torch.nn.Mod
         KeyError: If required keys are missing.
 
     """
-    model = PooledMLPRegressor.from_config(model_cfg)
+    model_type = model_cfg.get("type", "pooled_mlp")
+
+    try:
+        model_class = get_model_class(model_type)
+    except KeyError as e:
+        raise KeyError(f"Unsupported model type: {model_type}") from e
+    model = model_class.from_config(model_cfg)
     return model.to(device)
 
 
@@ -807,6 +813,37 @@ def main() -> None:
         # Log row
         row: Dict[str, Any] = {"epoch": epoch, "train_loss": avg_loss}
         row.update(metrics)
+        # mark whether this epoch produced the best monitored metric
+        row["is_best"] = bool(es_state.improved)
+
+        # Persist a human-friendly copy of the best epoch metrics when improved.
+        # This writes both JSON and a single-row CSV named best_metrics.*
+        if row["is_best"]:
+            try:
+                import csv
+                import json
+                import time
+
+                best_json = Path(exp_dir) / "best_metrics.json"
+                best_csv = Path(exp_dir) / "best_metrics.csv"
+
+                # add timestamp for reproducibility
+                row_with_time = {**row, "time": time.time()}
+
+                # write JSON (overwrites previous best)
+                with open(best_json, "w", encoding="utf-8") as f_j:
+                    json.dump(row_with_time, f_j, indent=2, ensure_ascii=False)
+
+                # write CSV (single-row, overwrite)
+                with open(best_csv, "w", newline="", encoding="utf-8") as f_c:
+                    fieldnames = list(row_with_time.keys())
+                    writer = csv.DictWriter(f_c, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerow(row_with_time)
+            except Exception as exc:
+                print(f"[WARN] Failed to write best_metrics files: {exc}")
+
+        # finally log the epoch row (metrics.csv keeps all epochs)
         logger.log(row)
 
         # Early stopping termination

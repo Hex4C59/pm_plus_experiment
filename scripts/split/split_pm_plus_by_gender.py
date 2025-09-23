@@ -17,14 +17,14 @@ directories with symlinks/copies and writes manifests.
 Example:
     >>> python scripts/split/split_pm_plus_by_gender.py \\
     ...   --src_root data/raw/PM+ \\
-    ...   --out_root data/raw \\
-    ...   --label_xlsx data/gender/label.xlsx \\
+    ...   --out_root data/processed \\
+    ...   --label_xlsx data/annotations/label.xlsx \\
     ...   --sheet Sheet1 \\
     ...   --speaker_col speaker \\
     ...   --gender_col gender \\
     ...   --train_ratio 0.8 \\
     ...   --op link \\
-    ...   --inplace \\
+    ...     \\
     ...   --seed 42
 
 """

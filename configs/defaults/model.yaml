@@ -1,6 +1,6 @@
 # Model default hyperparameters and architecture choices.
 model:
-  name: pooled_mlp
+  type: pooled_mlp
   input_dim: 768
   hidden_dims: [512, 256]
   pooling: "mean_std"   # options: mean, mean_std, mean_max

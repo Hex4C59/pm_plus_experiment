@@ -1,0 +1,48 @@
+# Experiment config for Self-Attentive BiLSTM regressor.
+experiment:
+  id: attn_bilstm_v1
+  description: "Self-attentive BiLSTM baseline (attention pooling + BiLSTM)."
+
+include:
+  - ../defaults/base.yaml
+  - ../defaults/data.yaml
+  - ../defaults/model.yaml
+  - ../defaults/train.yaml
+
+overrides:
+  project:
+    output_root: runs/attn_bilstm_v1
+
+  data:
+    processed: data/processed
+    features: data/processed/features/msp_1.6
+    model_folder: wav2vec2-base-l1
+    annotations: data/annotations/MSP_Podcast_labels.csv
+
+  model:
+    type: attn_bilstm
+    input_dim: 768
+    lstm_hidden: 256
+    lstm_layers: 2
+    bidirectional: true
+    attn_dim: 128
+    mlp_hidden: [256]
+    dropout: 0.2
+
+  train:
+    epochs: 150
+    batch_size: 32
+    early_stopping:
+      enabled: true
+      monitor: val_loss
+      mode: min
+      patience: 10
+      min_delta: 1e-4
+      restore_best: true
+
+  optim:
+    lr: 1e-3
+    weight_decay: 0.0
+    scheduler:
+      type: linear
+      warmup_steps: 1000
