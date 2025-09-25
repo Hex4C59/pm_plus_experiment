@@ -230,7 +230,7 @@ def build_dataloaders(
     batch_size: int,
     num_workers: int,
     pin_memory: bool,
-) -> Tuple[DataLoader, DataLoader, str]:
+) -> Tuple[DataLoader, DataLoader]:
     """
     Create train and validation/test dataloaders.
 
@@ -256,22 +256,6 @@ def build_dataloaders(
     annotations = data_cfg.get("annotations", None)
     model_folder = data_cfg.get("model_folder", None)
 
-    # Determine validation split preference
-    split_root = Path(features_root)
-    # If features_root points to a model folder already, adjust parents
-    # Accept both patterns:
-    #  - features_root/<model>/train
-    #  - features_root/train (single-model root)
-    if (split_root / "train").exists():
-        model_root = features_root
-    else:
-        # try first child model dir
-        model_dirs = [p for p in split_root.iterdir() if p.is_dir()]
-        if not model_dirs:
-            raise FileNotFoundError(f"No model dirs under: {split_root}")
-        model_root = str(split_root)
-
-    val_split = "val" if (Path(model_root) / "val").exists() else "test"
 
     train_loader = make_dataloader(
         features_root=features_root,
@@ -285,7 +269,7 @@ def build_dataloaders(
     )
     val_loader = make_dataloader(
         features_root=features_root,
-        split=val_split,
+        split="test",
         model_folder=model_folder,
         annotations=annotations,
         batch_size=batch_size,
@@ -293,7 +277,7 @@ def build_dataloaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
     )
-    return train_loader, val_loader, val_split
+    return train_loader, val_loader
 
 
 def build_model(model_cfg: Dict[str, Any], device: torch.device) -> torch.nn.Module:
@@ -698,7 +682,7 @@ def main() -> None:
             print("[Logger] Failed to write validation disabled note to metrics.csv")
         print("[Info] Validation disabled during training; use infer.py for test")
     else:
-        train_loader, val_loader, val_split = build_dataloaders(
+        train_loader, val_loader = build_dataloaders(
             data_cfg,
             batch_size=batch_size,
             num_workers=num_workers,

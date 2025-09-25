@@ -16,9 +16,9 @@ overrides:
 
   data:
     processed: data/processed
-    features: data/processed/features/msp_1.6
+    features: data/processed/features/pm_plus
     model_folder: wav2vec2-base-l1
-    annotations: data/annotations/MSP_Podcast_labels.csv
+    annotations: data/annotations/label.xlsx
 
   model:
     hidden_dims: [512, 256]

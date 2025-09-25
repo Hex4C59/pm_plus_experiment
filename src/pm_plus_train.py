@@ -32,8 +32,11 @@ __last_updated__ = "2025-09-20"
 
 
 import argparse
+import csv
+import json
 import os
 import random
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,10 +48,10 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from models import get_model_class
 from src.data.loader import make_dataloader
 from src.losses.lccc import LCCCLoss
 from src.metrics.ccc import CCCMetric
+from src.models import get_model_class
 from src.utils.checkpoint import load_checkpoint, save_checkpoint
 from src.utils.logger import Logger
 from src.utils.visualization import plot_losses, plot_metrics
@@ -227,7 +230,7 @@ def build_dataloaders(
     batch_size: int,
     num_workers: int,
     pin_memory: bool,
-) -> Tuple[DataLoader, DataLoader, str]:
+) -> Tuple[DataLoader, DataLoader]:
     """
     Create train and validation/test dataloaders.
 
@@ -253,22 +256,6 @@ def build_dataloaders(
     annotations = data_cfg.get("annotations", None)
     model_folder = data_cfg.get("model_folder", None)
 
-    # Determine validation split preference
-    split_root = Path(features_root)
-    # If features_root points to a model folder already, adjust parents
-    # Accept both patterns:
-    #  - features_root/<model>/train
-    #  - features_root/train (single-model root)
-    if (split_root / "train").exists():
-        model_root = features_root
-    else:
-        # try first child model dir
-        model_dirs = [p for p in split_root.iterdir() if p.is_dir()]
-        if not model_dirs:
-            raise FileNotFoundError(f"No model dirs under: {split_root}")
-        model_root = str(split_root)
-
-    val_split = "val" if (Path(model_root) / "val").exists() else "test"
 
     train_loader = make_dataloader(
         features_root=features_root,
@@ -282,7 +269,7 @@ def build_dataloaders(
     )
     val_loader = make_dataloader(
         features_root=features_root,
-        split=val_split,
+        split="test",
         model_folder=model_folder,
         annotations=annotations,
         batch_size=batch_size,
@@ -290,7 +277,7 @@ def build_dataloaders(
         num_workers=num_workers,
         pin_memory=pin_memory,
     )
-    return train_loader, val_loader, val_split
+    return train_loader, val_loader
 
 
 def build_model(model_cfg: Dict[str, Any], device: torch.device) -> torch.nn.Module:
@@ -310,11 +297,13 @@ def build_model(model_cfg: Dict[str, Any], device: torch.device) -> torch.nn.Mod
     """
     model_type = model_cfg.get("type", "pooled_mlp")
 
-    try:
-        model_class = get_model_class(model_type)
-    except KeyError as e:
-        raise KeyError(f"Unsupported model type: {model_type}") from e
-    model = model_class.from_config(model_cfg)
+    # Obtain model class from registry, then instantiate using from_config
+    # (or fall back to direct construction) for consistent behavior.
+    model_cls = get_model_class(model_type)
+    if hasattr(model_cls, "from_config"):
+        model = model_cls.from_config(model_cfg)
+    else:
+        model = model_cls(**model_cfg)
     return model.to(device)
 
 
@@ -681,7 +670,6 @@ def main() -> None:
             pin_memory=pin_memory,
         )
         val_loader = None
-        val_split = "none"
         # disable early stopping and related mechanisms
         es_enabled = False
 
@@ -694,7 +682,7 @@ def main() -> None:
             print("[Logger] Failed to write validation disabled note to metrics.csv")
         print("[Info] Validation disabled during training; use infer.py for test")
     else:
-        train_loader, val_loader, val_split = build_dataloaders(
+        train_loader, val_loader = build_dataloaders(
             data_cfg,
             batch_size=batch_size,
             num_workers=num_workers,
@@ -815,15 +803,8 @@ def main() -> None:
         row.update(metrics)
         # mark whether this epoch produced the best monitored metric
         row["is_best"] = bool(es_state.improved)
-
-        # Persist a human-friendly copy of the best epoch metrics when improved.
-        # This writes both JSON and a single-row CSV named best_metrics.*
         if row["is_best"]:
             try:
-                import csv
-                import json
-                import time
-
                 best_json = Path(exp_dir) / "best_metrics.json"
                 best_csv = Path(exp_dir) / "best_metrics.csv"
 
@@ -842,8 +823,6 @@ def main() -> None:
                     writer.writerow(row_with_time)
             except Exception as exc:
                 print(f"[WARN] Failed to write best_metrics files: {exc}")
-
-        # finally log the epoch row (metrics.csv keeps all epochs)
         logger.log(row)
 
         # Early stopping termination

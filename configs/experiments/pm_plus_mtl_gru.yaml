@@ -1,7 +1,7 @@
-# Experiment config for Self-Attentive BiLSTM regressor.
+# Experiment config: Multi-task GRU for MSP dataset (example)
 experiment:
-  id: attn_bilstm_v1
-  description: "Self-attentive BiLSTM baseline (attention pooling + BiLSTM)."
+  id: msp_mtl_gru_v1
+  description: "MTL GRU baseline on MSP (adapt settings as needed)."
 
 include:
   - ../defaults/base.yaml
@@ -11,10 +11,10 @@ include:
 
 overrides:
   project:
-    output_root: runs/attn_bilstm_v1
+    output_root: runs/msp_mtl_gru_v1
     num_workers: 8
     pin_memory: true
-    seed: 123
+    seed: 42
 
   data:
     processed: data/processed
@@ -23,29 +23,30 @@ overrides:
     annotations: data/annotations/label.xlsx
 
   model:
-    type: attn_bilstm
-    input_dim: 768
-    lstm_hidden: 256
-    lstm_layers: 2
-    bidirectional: true
-    attn_dim: 128
-    mlp_hidden: [256]
+    name: gru
+    input_size: 768
+    output_size: 2
+    num_classes: 7
+    hidden_size: 128
+    num_layers: 2
+    embedding_dim: 128
     dropout: 0.2
+    use_classification: false
 
   train:
-    epochs: 150
+    epochs: 120
     batch_size: 32
     early_stopping:
       enabled: true
       monitor: val_loss
       mode: min
-      patience: 10
+      patience: 8
       min_delta: 1e-4
       restore_best: true
 
   optim:
-    lr: 1e-3
+    lr: 3e-4
     weight_decay: 0.0
     scheduler:
       type: linear
-      warmup_steps: 1000
+      warmup_steps: 800
